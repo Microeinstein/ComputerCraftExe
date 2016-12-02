@@ -1,0 +1,2 @@
+loadfile("std")()
+term.wash()
