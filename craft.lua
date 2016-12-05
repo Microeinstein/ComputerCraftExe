@@ -42,9 +42,8 @@ Final point: tree[item][tree[item].selected].required
 objectives = {}			--[i]	= {name, count, recipe}
 
 items = {}				--[i]	= {name, count, damage}
-itop = {}				--[i]	= {name, count, damage}
-imid = {}				--[i]	= {name, count, damage}
-ibot = {}				--[i]	= {name, count, damage}
+slots = {}				--[i]	= {name, count, damage}
+noNeed = {}				--[i]	= {name, count, damage}
 inverseDir = false
 
 errors = {
@@ -85,11 +84,13 @@ function isRecipeComplete(recipe, count)
 	for y=1, recipe.h do
 		for x=1, recipe.w do
 			local det = turtle.getItemDetailXY(x, y)
+			local n = math.xyToNum(x, y, m)
 			if det then
-				local n = math.xyToNum(x, y, m)
 				if not (det.name == recipe[n].name and det.count >= recipe[n].count / recipe.F.count * count) then
 					return false
 				end
+			elseif recipe[n].count > 0 and recipe[n].name ~= "" then
+				return false
 			end
 		end
 	end
@@ -199,13 +200,8 @@ function addItem(id)
 end
 function scanChest()
 	items = {}
+	slots = {}
 	noNeed = {}
-	itop = {}
-	imid = {}
-	ibot = {}
-	emptySlots()
-	moveUp()
-	moveDown()
 	print("Scanning bottom chest...")
 	local get, it, rcps
 	repeat
@@ -215,7 +211,6 @@ function scanChest()
 		get = turtle.suckDown()
 		if get then
 			it = turtle.getItemDetail()
-			table.insert(itop, table.copy(it))
 			addItem(it)
 			print(string.format(" + %d * %s", it.count, it.name))
 			if not turtle.dropUp() then
@@ -361,28 +356,31 @@ function makeObjectives(branch, item, count)
 end
 
 --Move items
-function fromMid(x, y, to, amount)
-	local itk, itv = table.first(imid, function(_,v,x,y) return v.x == x and v.y == y end, x, y)
+function slotsM(x, y, amount)
+	local itk, itv = table.first(slots, function(_,v,x,y) return v.x == x and v.y == y end, x, y)
 	if itv then
-		table.remove(imid, itk)
-		itv.x = nil
-		itv.y = nil
-		table.insert(to, itv)
+		if amount then
+			itv.count = itv.count - amount
+		else
+			itv.count = turtle.getItemCountXY(x, y)
+		end
+		if itv.count <= 0 then
+			table.remove(slots, itk)
+		end
 	end
 end
-function toMid(x, y, from, amount)
-	local it = from[1]
-	table.remove(from, 1)
-	it.x = x
-	it.y = y
-	table.insert(imid, it)
+function slotsP(x, y)
+	local id = turtle.getItemDetailXY(x, y)
+	id.x = x
+	id.y = y
+	table.insert(slots, id)
 end
 function reserveSlots(recipe)
 	for y=1, recipe.h do
 		for x=1, recipe.w do
 			if turtle.getItemCountXY(x, y) > 0 then
-				if turtle.push(x, y, turtle.faces.U) then
-					fromMid(x, y, itop)
+				if turtle.push(x, y, inverseDir and turtle.faces.D or turtle.faces.U) then
+					slotsM(x, y)
 				else
 					stop(errors.noDrop)
 				end
@@ -406,14 +404,13 @@ function roll(transport)
 	print("Getting next items...")
 	local rev = table.reverse(transport)
 	local to = inverseDir and turtle.faces.U or turtle.faces.D
-	local ito = inverseDir and itop or ibot
 	
 	for n, s in pairs(rev) do
 		if turtle.getItemCountXY(s.x, s.y) > 0 then
 			if not turtle.push(s.x, s.y, to) then
 				stop(errors.noDrop)
 			end
-			fromMid(s.x, s.y, ito)
+			slotsM(s.x, s.y)
 		end
 	end
 	for n, s in pairs(rev) do
@@ -432,14 +429,14 @@ function rollGetNext(x, y, recur)
 			return rollGetNext(x, y, true)
 		end
 	else
-		toMid(x, y, inverseDir and ibot or itop)
+		slotsP(x, y)
 	end
 	return true
 end
 
 --Crafting
 function placeItem(x, y, recipe, count)
-	local itk, itv = table.first(imid, function(_,v,x,y) return v.x == x and v.y == y end, x, y)
+	local itk, itv = table.first(slots, function(_,v,x,y) return v.x == x and v.y == y end, x, y)
 	if not itv then
 		return
 	end
@@ -460,11 +457,17 @@ function placeItem(x, y, recipe, count)
 				items[itv.name].count = items[itv.name].count - movC
 				turtle.moveSlot(x, y, rxy.x, rxy.y, movC)
 			else
-				table.remove(imid, itk)
+				table.remove(slots, itk)
 				break
 			end
 		end
 	end
+end
+function reapItems(name, x, y)
+	if items[name] and items[name].count <= 0 then
+		items[name] = nil
+	end
+	slotsM(x, y)
 end
 function reserveCraft(recipe)
 	print("Emptying other slots...")
@@ -472,7 +475,7 @@ function reserveCraft(recipe)
 		for x=1, 4 do
 			if (x > recipe.w or y > recipe.h) and turtle.getItemCountXY(x, y) > 0 then
 				if turtle.push(x, y, inverseDir and turtle.faces.D or turtle.faces.U) then
-					fromMid(x, y, inverseDir and ibot or itop)
+					slotsM(x, y)
 				else
 					stop(errors.noDrop)
 				end
@@ -497,7 +500,8 @@ function craft(recipe, count)
 					end
 				end
 			end
-			turtle.push(4, 1, inverseDir and turtle.faces.D or turtle.faces.U)
+			addItem(turtle.getItemDetailXY(4, 1))
+			turtle.push(4, 1, inverseDir and turtle.faces.U or turtle.faces.D)
 		else
 			local d = turtle.getItemDetail()
 			if (d and d.name ~= fn) or ct == 0 then
@@ -510,9 +514,6 @@ end
 --Main
 function followOjectives()
 	for n, obj in pairs(objectives) do
-		if n > 1 then
-			scanChest()
-		end
 		print(string.format("Crafting %d * %s...", obj.count, obj.name))
 		reserveSlots(obj.recipe)
 		local tb = transportBelt(obj.recipe)
@@ -520,6 +521,7 @@ function followOjectives()
 			roll(tb)
 			for n, s in pairs(tb) do
 				placeItem(s.x, s.y, obj.recipe, obj.count)
+				reapItems(obj.recipe.F.name, s.x, s.y)
 			end
 		until isRecipeComplete(obj.recipe, obj.count)
 		reserveCraft(obj.recipe)
@@ -544,6 +546,9 @@ function start()
 	if not argOnlyReq then
 		term.printc(colors.blue, nil, "\n <Loading items>")
 		os.sleep(0.1)
+		emptySlots()
+		moveUp()
+		moveDown()
 		scanChest()
 	end
 	
