@@ -14,6 +14,11 @@ Usage:
  * `-h`: Show help
  * `recipe`: Recipe path
 
+Demonstration
+
+![Maker demo gif](http://i.imgur.com/IzieyNZ.gif)
+
+
  
 ## Craft
 Automatically craft items using recipes made with Maker.
@@ -29,3 +34,7 @@ Usage:
  * `amount`: How many items to craft
  * `-t`: Only shows requirements combinations
  * `-s`: Scan bottom chest without move items up and down
+
+Demonstration
+
+![Craft demo gif](http://i.imgur.com/d1HN9x1.gif)
