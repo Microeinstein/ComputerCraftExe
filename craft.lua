@@ -65,8 +65,9 @@ objectives = {}			--[i]	= {name~damage, count, recipe}
 nameCache = {}			--[id]	= name
 items = {}				--[i]	= {name, count, damage}
 slots = {}				--[i]	= {name, count, damage}
-noNeed = {}				--[i]	= {name, count, damage}
+--noNeed = {}				--[i]	= {name, count, damage}
 inverseDir = false
+craft_debug = false
 
 errors = {
 	directoryEmpty	= "%s does not have recipes",
@@ -77,10 +78,10 @@ errors = {
 	noDrop			= "Unable to free this slot",
 	noTake			= "Unable to take items",
 	noItem			= "Expected item details",
-	noItems			= "Bottom chest is empty",
+	noItems			= "Chests are empty",
 	noRecipe		= "%s is not a recipe",
 	noCraft			= "Unable to craft %s",
-	countMinor		= "%s count is %d"
+	countMinor		= "%s count (%d) is less than %d"
 }
 function stop(...)
 	if #arg > 0 then
@@ -88,17 +89,22 @@ function stop(...)
 	end
 	error()
 end
+local function trace(txt, ...)
+	if craft_debug then
+		term.pausec(colors.white, colors.green, txt.."("..table.concat(arg, ",")..")")
+	end
+end
 
 --Recipes
 function recipeID(recipe)
 	return getID(recipe.F)
 end
-function findRecipe(ID)
+function findRecipeGroup(ID)
 	local p1, p2 = getNameDamage(ID)
 	local _, rv = table.first(recipes, 
-		function(k,v,id,variant)
-			local ki, kvar = getNameDamage(k)
-			return ki == id and (variant == nil or kvar == variant)
+		function(rID,rec,nam,dam)
+			local knam, kdam = getNameDamage(rID)
+			return knam == nam and (dam == nil or kdam == dam)
 		end, p1, p2)
 	return rv
 end
@@ -108,51 +114,54 @@ end
 function isNeedSlot(k)
 	return k ~= "F" and k ~= "w" and k ~= "h"
 end
-function fixRecipe(r)
-	local minimal = r ~= nil and r.F ~= nil and (
-		r[1] ~= nil or
-		r[2] ~= nil or
-		r[3] ~= nil or
-		r[4] ~= nil or
-		r[5] ~= nil or
-		r[6] ~= nil or
-		r[7] ~= nil or
-		r[8] ~= nil or
-		r[9] ~= nil
+function fixRecipe(recipe)
+	local minimal = recipe ~= nil and recipe.F ~= nil and (
+		recipe[1] ~= nil or
+		recipe[2] ~= nil or
+		recipe[3] ~= nil or
+		recipe[4] ~= nil or
+		recipe[5] ~= nil or
+		recipe[6] ~= nil or
+		recipe[7] ~= nil or
+		recipe[8] ~= nil or
+		recipe[9] ~= nil
 	)
 	if minimal then
 		for i=1, 9 do
-			r[i] = r[i] or nonil
+			recipe[i] = recipe[i] or nonil
 		end
 	end
 	return minimal
 end
-function isRecipeComplete(recipe, count)
+function isRecipeComplete(recipe, amount)
+	trace("isRecipeComplete",recipe,amount)
 	local m = math.max(recipe.w, recipe.h)
+	local lowered = amount
 	for y=1, recipe.h do
 		for x=1, recipe.w do
-			local det = turtle.getItemDetailXY(x, y)
-			local n = math.xyToNum(x, y, m)
-			if det then
-				if not (det.name == recipe[n].name
-				    and (not recipe[n].lock or det.damage == recipe[n].damage)
-					and det.count >= recipe[n].count / recipe.F.count * count) then
+			local item = turtle.getItemDetailXY(x, y)
+			local slot = math.xyToNum(x, y, m)
+			local required = recipe[slot]
+			if item then
+				if not (item.name == required.name and (not required.lock or item.damage == required.damage)) then
 					return false
+				elseif item.count < required.count / recipe.F.count * amount then
+					lowered = math.min(lowered, amount - ((amount / recipe.F.count * required.count) - item.count))
 				end
-			elseif recipe[n].count > 0 and recipe[n].name ~= "" then
+			elseif required.count > 0 and required.name ~= "" then
 				return false
 			end
 		end
 	end
-	return true
+	return lowered == amount or lowered
 end
-function requiredItems(recipe, count)
+function requiredItems(recipe, amount)
 	local required = {}
 	local ID
-	for slot, item in pairs(recipe) do
-		if slot ~= "F" and slot ~= "w" and slot ~= "h" and (not string.isBlank(item.name)) and item.count > 0 then
+	for k, item in pairs(recipe) do
+		if isNeedSlot(k) and (not string.isBlank(item.name)) and item.count > 0 then
 			ID = getID(item)
-			required[ID] = (required[ID] or 0) + math.ceil(item.count / recipe.F.count * count)
+			required[ID] = (required[ID] or 0) + math.ceil(item.count / recipe.F.count * amount)
 		end
 	end
 	return required
@@ -223,8 +232,8 @@ function getID(details)
 	end
 	return r;
 end
-function getNameDamage(id)
-	local p1, p2 = unpack(string.split(id, "~"))
+function getNameDamage(ID)
+	local p1, p2 = unpack(string.split(ID, "~"))
 	return p1, tonumber(p2)
 end
 function getShortName(ID)
@@ -272,10 +281,11 @@ function moveDown()
 end
 function emptySlots()
 	print("Freeing slots...")
+	local drop = argOnlyScan and turtle.dropDown or turtle.dropUp
 	for s = 1, 16 do
 		if turtle.getItemCount(s) > 0 then
 			turtle.select(s)
-			if not turtle.dropUp() then
+			if not drop() then
 				stop(errors.noDrop)
 			end
 		end
@@ -296,8 +306,8 @@ function addItem(details)
 end
 function scanChest()
 	items = {}
-	slots = {}
-	noNeed = {}
+	--slots = {}
+	--noNeed = {}
 	print("Scanning bottom chest...")
 	local get, it, rcps
 	repeat
@@ -320,59 +330,66 @@ function scanChest()
 end
 
 --Sorting
-function makeTree(ID, count, position, noNeeds, tab)
+function makeTree(ID, amount, position, remainingItems, tab)
 	tab = tab or 0
-	if count > 0 then
-		local prnt = string.format("%s%d %s", string.rep(" ", tab), count, getShortName(ID))
+		if amount <= 0 then
+			return
+		end
+	local prnt = string.format("%s%d %s", string.rep(" ", tab), amount, getShortName(ID))
 		if argOnlyReq then
 			term.pause(prnt)
 		else
 			print(prnt)
 			os.sleep(0.05)
 		end
-		local rcps = findRecipe(ID)
-		if rcps and table.len(rcps) > 0 then
-			position[ID] = {}
-			position[ID].selected = 1
-			for ren, re in pairs(rcps) do
-				if ren > 1 then
-					print(string.rep(" ", tab).."-OR-")
-				end
-				local req = requiredItems(re, count)
-				--Remove already crafted items
-				for id, am in pairs(table.copy(req, false)) do
-					local rit = findRecipe(id)
-					if rit and table.len(rit) > 0 then
-						local existent = findItems(noNeeds, getNameDamage(id))
-						if existent then
-							for _, exitem in pairs(existent) do
-								if exitem.count > 0 then
-									local su = math.min(exitem.count, am)
-									am = am - su
-									exitem.count = exitem.count - su
-								end
-								if am == 0 then
-									req[id] = nil
-								elseif am > 0 then
-									req[id] = am
-								else
-									stop(errors.countMinor, "am", am)
-								end
+	local recipes = findRecipeGroup(ID)
+		if not recipes or table.len(recipes) <= 0 then
+			return
+		end
+	position[ID] = {}
+	position[ID].selected = 1
+	for n, recipe in pairs(recipes) do
+		if n > 1 then
+			print(string.rep(" ", tab).."-OR-")
+		end
+		local required = requiredItems(recipe, amount)
+		--Remove already crafted items
+		if not argOnlyReq then
+			for rID, rAM in pairs(table.copy(required, false)) do
+				local requiredRecipes = findRecipeGroup(rID)
+				if requiredRecipes and table.len(requiredRecipes) > 0 then
+					local existent = findItems(remainingItems, getNameDamage(rID))
+					if existent then
+						--objDebug(existent,"exBefore")
+						for _, existem in pairs(existent) do
+							if existem.count > 0 then
+								local subtract = math.min(existem.count, rAM)
+								rAM = rAM - subtract
+								existem.count = existem.count - subtract
+							end
+							if rAM == 0 then
+								required[rID] = nil
+							elseif rAM > 0 then
+								required[rID] = rAM
+							else
+								stop(errors.countMinor, "am", rAM, 0)
 							end
 						end
+						--objDebug(existent,"exAfter")
 					end
 				end
-				position[ID][ren] = {
-					required = req,
-					branch = {}
-				}
-				for id, am in pairs(req) do
-					if id ~= ID then
-						makeTree(id, am, position[ID][ren].branch, noNeeds, tab + 1)
-					else
-						stop(errors.recursiveBreak, ID)
-					end
-				end
+			end
+		end
+		
+		position[ID][n] = {
+			required = required,
+			branch = {}
+		}
+		for rID, rAM in pairs(required) do
+			if rID ~= ID then
+				makeTree(rID, rAM, position[ID][n].branch, remainingItems, tab + 1)
+			else
+				stop(errors.recursiveBreak, ID)
 			end
 		end
 	end
@@ -380,41 +397,40 @@ end
 function readTree(position)
 	local total = {}
 	--tree[item][tree[item].selected].required
-	for _, req in pairs(position) do
-		local sel = req[req.selected]
-		for id, am in pairs(sel.required) do
-			if not sel.branch[id] then
-				total[id] = (total[id] or 0) + am
+	for _, combos in pairs(position) do
+		local combo = combos[combos.selected]
+		for ID, AM in pairs(combo.required) do
+			if not combo.branch[ID] then
+				total[ID] = (total[ID] or 0) + AM
 			end
 		end
-		if table.len(sel.branch) > 0 then
-			local branch = readTree(sel.branch)
-			for id, am in pairs(branch) do
-				total[id] = (total[id] or 0) + am
+		if table.len(combo.branch) > 0 then
+			local branch = readTree(combo.branch)
+			for ID, AM in pairs(branch) do
+				total[ID] = (total[ID] or 0) + AM
 			end
 		end
 	end
 	return total
 end
 function nextBranch(position)
-	for it, req in pairs(position) do
-		local sel = req[req.selected]
-		if table.len(sel.branch) > 0 then
-			--for it, am in pairs(sel.required) do
-			--	if sel.branch[it] then
-			--		if nextBranch(sel.branch[it]) then
-			--			return true
-			--		end
-			--	end
-			--end
-			if nextBranch(sel.branch) then
+	local length = table.len(position)
+	local at = 0
+	for ID, combos in pairs(position) do
+		at = at + 1
+		local combo = combos[combos.selected]
+		--If combo has other combinations
+		if table.len(combo.branch) > 0 then
+			if nextBranch(combo.branch) then
 				return true
 			end
 		end
-		req.selected = req.selected + 1
-		if req.selected > table.len(req) - 1 then
-			req.selected = 1
-			return false
+		combos.selected = combos.selected + 1
+		if combos.selected >= table.len(combos) then
+			combos.selected = 1
+			if at >= length then
+				return false
+			end
 		else
 			return true
 		end
@@ -451,10 +467,10 @@ function makeObjectives(branch, ID, count)
 	end]]
 	local bri = branch[ID]
 	local sel = bri[bri.selected]
-	local rec = findRecipe(ID)[bri.selected]
+	local rec = findRecipeGroup(ID)[bri.selected]
 	if table.len(sel.branch) > 0 then
 		for rid, ra in pairs(sel.required) do
-			local rec = findRecipe(rid)
+			local rec = findRecipeGroup(rid)
 			if rec and table.len(rec) > 0 then
 				makeObjectives(sel.branch, rid, ra)
 			end
@@ -462,23 +478,24 @@ function makeObjectives(branch, ID, count)
 	end
 	print(string.format(" > %d %s", count, getShortName(ID)))
 	table.insert(objectives, {
-		id = ID,
+		ID = ID,
 		count = count,
 		recipe = rec
 	})
 end
 function showRequirements()
-	local req
 	local inc = 0
 	while true do
 		inc = inc + 1
 		print(string.format("COMBINATION %d:", inc))
 		
-		req = readTree(recipeTree)
-		for k, v in pairs(req) do
-			term.pause(" "..v.." "..getShortName(k))
+		local requirements = readTree(recipeTree)
+		for rID, rAM in pairs(requirements) do
+			term.pause(" "..rAM.." "..getShortName(rID))
 		end
-		if not nextBranch(recipeTree) then
+		local otherCombos = nextBranch(recipeTree)
+		--fs.write("recipeTree.lua", textutils.serialise(recipeTree))
+		if not otherCombos then
 			return
 		end
 		print("\n")
@@ -564,43 +581,58 @@ function rollGetNext(x, y, recur)
 end
 
 --Crafting
-function placeItem(x, y, recipe, count)
-	local itk, itv = table.first(slots, function(_,v,x,y) return v.x == x and v.y == y end, x, y)
-	if not itv then
+function placeItem(slot, recipe, amount)
+	trace("placeItem",slot.x,slot.y,recipe.F.name,amount)
+	local slotK, slotItem = table.first(slots,
+		function(_,v,x,y) return v.x == x and v.y == y end,
+		slot.x, slot.y)
+	if not slotItem then
 		return
 	end
-	local numbers = table.where(recipe, isNeedSlot)
-	local rew = findItems(numbers, itv.name, itv.damage)
-	if not rew or table.len(rew) < 1 then
+	local requirements = findItems(table.where(recipe, isNeedSlot), slotItem.name, slotItem.damage)
+	if not requirements or table.len(requirements) < 1 then
 		return
 	end
-	local id = getID(itv)
-	local done
-	for k, iad in pairs(rew) do
-		local rxy = recipeToXY(k)
-		local movC = math.min(turtle.getItemCountXY(x, y), (count / recipe.F.count * iad.count) - turtle.getItemCountXY(rxy.x, rxy.y))
-		if movC > 0 then
-			if items[id].count < movC then
-				stop(errors.countMinor, getShortName(id), items[id].count)
-			end
-			if itv.count > 0 then
-				itv.count = itv.count - movC
-				items[id].count = items[id].count - movC
-				turtle.moveSlot(x, y, rxy.x, rxy.y, movC)
-			else
-				table.remove(slots, itk)
-				break
+	local ID = getID(slotItem)
+	for k, required in pairs(requirements) do
+		local finalSlot = recipeToXY(k)
+		local alreadyPlaced = turtle.getItemDetailXY(finalSlot.x, finalSlot.y)
+		local placedCount = alreadyPlaced and alreadyPlaced.count or 0
+		if placedCount == 0 or ID.damage == alreadyPlaced.damage then
+			local moveAmount = math.min(turtle.getItemCountXY(slot.x, slot.y),
+							math.ceil(amount / recipe.F.count * required.count) - placedCount)
+			if moveAmount > 0 then
+				if items[ID].count < moveAmount then
+					stop(errors.countMinor, getShortName(ID), items[ID].count, moveAmount)
+				end
+				if slotItem.count > 0 then
+					slotItem.count = slotItem.count - moveAmount
+					if not items[ID] then
+						objDebug(ID,"ID")
+						objDebug(items,"items")
+					end
+					items[ID].count = items[ID].count - moveAmount
+					turtle.moveSlot(slot.x, slot.y, finalSlot.x, finalSlot.y, moveAmount)
+				else
+					table.remove(slots, slotK)
+					break
+				end
+				--items[ID].count
+				--elseif slotItem.count < moveAmount then
+				--amount = amount - (math.ceil(amount / recipe.F.count * required.count) - placedCount)
+				--objDebug(amount, "place_amount")
+				--stop(errors.countMinor, getShortName(ID), items[ID].count, moveAmount)
 			end
 		end
 	end
 end
-function reapItems(id, x, y)
-	if items[id] and items[id].count <= 0 then
-		items[id] = nil
+function reapItems(ID, slot)
+	if items[ID] and items[ID].count <= 0 then
+		items[ID] = nil
 	end
-	slotsM(x, y)
+	slotsM(slot.x, slot.y)
 end
-function reserveCraft(recipe)
+function reserveCraft(recipe, amount)
 	print("Emptying other slots...")
 	for y=1, 4 do
 		for x=1, 4 do
@@ -614,7 +646,7 @@ function reserveCraft(recipe)
 		end
 	end
 end
-function craft(recipe, count)
+function craft(recipe)
 	turtle.setSlot(4, 1)
 	local fn = recipeID(recipe)
 	local ct = 0
@@ -624,12 +656,12 @@ function craft(recipe, count)
 			ct = ct + 1
 			for k, v in pairs(recipe) do
 				if k ~= "F" and k ~= "w" and k ~= "h" then
-					local id = getID(v)
-					if items[id] then
-						if items[id].count == 0 then
-							items[id] = nil
-						elseif items[id].count < 0 then
-							stop(errors.countMinor, getShortName(id), items[id].count)
+					local ID = getID(v)
+					if items[ID] then
+						if items[ID].count == 0 then
+							items[ID] = nil
+						elseif items[ID].count < 0 then
+							stop(errors.countMinor, getShortName(ID), items[ID].count, 0)
 						end
 					end
 				end
@@ -637,34 +669,59 @@ function craft(recipe, count)
 			addItem(turtle.getItemDetailXY(4, 1))
 			turtle.push(4, 1, inverseDir and turtle.faces.U or turtle.faces.D)
 		else
-			local id = turtle.getItemDetail()
-			if (id and id.name ~= fn.name
-				   and id.count ~= fn.count
-				   and id.damage ~= fn.damage) or ct == 0 then
+			local ID = turtle.getItemDetail()
+			if (ID and ID.name ~= fn.name
+				   and ID.count ~= fn.count
+				   and ID.damage ~= fn.damage) or ct == 0 then
 				stop(errors.noCraft, getShortName(fn))
 			end
 		end
 	until not success
 end
+function reAddItems(recipe)
+	for y=1, recipe.h do
+		for x=1, recipe.w do
+			local item = turtle.getItemDetailXY(x, y)
+			if item and item.count > 0 then
+				addItem(item)
+				if not turtle.push(x, y, inverseDir and turtle.faces.D or turtle.faces.U) then
+					stop(errors.noDrop)
+				end
+			end
+		end
+	end
+end
 
 --Main
 function followOjectives()
+	trace("followOjectives")
 	for n, obj in pairs(objectives) do
-		print(string.format("Making %d %s...", obj.count, getShortName(obj.id)))
+		print(string.format("Making %d %s...", obj.count, getShortName(obj.ID)))
 		print("Allocating slots...")
 		reserveSlots(obj.recipe)
-		local tb = transportBelt(obj.recipe)
-		repeat
-			roll(tb)
-			for n, s in pairs(tb) do
-				placeItem(s.x, s.y, obj.recipe, obj.count)
-				reapItems(recipeID(obj.recipe), s.x, s.y)
-			end
-		until isRecipeComplete(obj.recipe, obj.count)
-		reserveCraft(obj.recipe)
-		craft(obj.recipe, obj.count)
+		followSubObjective(transportBelt(obj.recipe), obj.recipe, obj.count)
 		print("\n")
 	end
+end
+function followSubObjective(transport, recipe, count)
+	local complete
+	repeat
+		roll(transport)
+		for _, slot in pairs(transport) do
+			placeItem(slot, recipe, count)
+			reapItems(recipeID(recipe), slot)
+		end
+		complete = isRecipeComplete(recipe, count)
+		if not isBool(complete) then
+			reserveCraft(recipe, complete)
+			craft(recipe)
+			--reAddItems(recipe)
+			count = count - complete
+			complete = false
+		end
+	until complete
+	reserveCraft(recipe, count)
+	craft(recipe)
 end
 function start()
 	term.wash()
@@ -691,6 +748,7 @@ function start()
 	term.printc(colors.blue, nil, "\n <Building recipe tree>")
 	os.sleep(0.1)
 	makeTree(recipeID(final), argCount, recipeTree, table.copy(items, true))
+	--fs.write("recipeTree.lua", textutils.serialise(recipeTree))
 	
 	if argOnlyReq then
 		term.printc(colors.blue, nil, "\n <Showing requirements>")
