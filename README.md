@@ -23,8 +23,9 @@ Requirements:
  * STDTurtle
 
 Usage:
-`craft recipeFolder finalRecipe amount [-t]`
+`craft recipeFolder finalRecipe amount [-t] [-s]`
  * `recipeFolder`: Folder path that contains all the recipes
  * `finalRecipe`: Recipe file (not path) that will be crafted contained in the recipe folder
  * `amount`: How many items to craft
  * `-t`: Only shows the requirements combinations
+ * `-s`: Scan bottom chest without move items up and down
