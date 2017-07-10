@@ -25,7 +25,7 @@ Requirements:
 Usage:
 `craft recipeFolder finalRecipe amount [-t] [-s]`
  * `recipeFolder`: Folder path that contains all the recipes
- * `finalRecipe`: Recipe file (not path) that will be crafted contained in the recipe folder
+ * `finalRecipe`: Recipe file (not path) contained in the recipe folder that will be crafted
  * `amount`: How many items to craft
- * `-t`: Only shows the requirements combinations
+ * `-t`: Only shows requirements combinations
  * `-s`: Scan bottom chest without move items up and down
